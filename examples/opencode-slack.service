@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenCode Slack bot (dashboard + bot + embedded opencode server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/opencode-slack
+# Adjust these paths to match where bun and opencode were installed on your server
+ExecStart=/root/.bun/bin/bun run src/server.ts
+Environment=PATH=/root/.bun/bin:/root/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The dashboard reads .env from the working directory and spawns src/bot.ts itself
+Restart=always
+RestartSec=3
+# Stop child processes (the bot and the embedded opencode server) when this unit stops
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

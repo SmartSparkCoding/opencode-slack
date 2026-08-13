@@ -10,6 +10,7 @@ const BOT_SCRIPT = join(ROOT, "src", "bot.ts")
 const PID_FILE = join(ROOT, ".bot.pid")
 const STATE_FILE = join(ROOT, ".state.json")
 const PORT = Number(process.env.DASHBOARD_PORT || "8787")
+const HOST = process.env.HOST || "0.0.0.0"
 const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || "1707")
 const MAX_LOGS = 2000
 
@@ -402,8 +403,8 @@ const server = createServer(async (req, res) => {
   res.end(JSON.stringify({ error: "not found" }))
 })
 
-server.listen(PORT, () => {
-  log("info", `📊 Dashboard listening on http://localhost:${PORT}`)
+server.listen(PORT, HOST, () => {
+  log("info", `📊 Dashboard listening on http://${HOST}:${PORT}`)
   if (PIN) {
     log("info", "🔒 PIN authentication enabled")
   } else {
