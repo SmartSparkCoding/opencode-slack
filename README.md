@@ -16,6 +16,8 @@ Also includes a small web dashboard to start / stop the bot, watch its live logs
 | ⏹ `!stop` | Stop the current response mid-way. It aborts the run server-side so the next message is instant. |
 | ⏸ `!pause` | Pause the current response. A **▶️ Resume** button appears; click it to keep going in the same session. The button disappears after you click it. |
 | 🔒 Access control | Restrict who may use the bot with `ALLOWED_USERS`. |
+| 📋 Log channel | Set `LOG_CHANNEL` and every event (new session, tool calls, replies, errors) is posted there — plain text, never mentions anyone. |
+| 🔌 MCP servers | Any MCP server you configure for opencode (GitHub, databases, browsers…) works through the bot automatically. See [docs/mcp.md](docs/mcp.md). |
 | 📊 Dashboard | Start/stop the bot, live logs, auto-start toggle — all in a little web page. |
 | 🔐 PIN gate | Protect the dashboard with a PIN before exposing it on the internet. |
 | 🚀 Always-on | Runs as a macOS `launchd` service: boots at login, restarts if it crashes. |
@@ -75,12 +77,13 @@ The bot runs as a Slack app you create yourself. Do this in your web browser:
    - Click **Generate Token** (scope `connections:write`) → copy the **`xapp-...`** token somewhere safe (you'll need it in Part 3).
 5. **Add permissions**:
    - Left sidebar → **OAuth & Permissions** → under **Scopes → Bot Token Scopes** click **Add an OAuth Scope** and add ALL of these:
-     - `chat:write`
-     - `app_mentions:read`
-     - `channels:history`
-     - `groups:history`
-     - `im:history`
-     - `reactions:write` *(optional — only if you want the ⏳/✅ reactions)*
+      - `chat:write`
+      - `app_mentions:read`
+      - `channels:history`
+      - `groups:history`
+      - `im:history`
+      - `reactions:write` *(optional — only if you want the ⏳/✅ reactions)*
+      - `users:read` *(recommended — lets the log channel show real names instead of "someone")*
 6. **Subscribe to events**:
    - Left sidebar → **Event Subscriptions** → toggle **Enable Events** **On**.
    - Under **Subscribe to bot events** → **Add Bot User Event** and add:
@@ -139,6 +142,12 @@ ALLOWED_USERS=
 
 # Show ⏳/✅ reactions while working (true/false)
 USE_REACTIONS=true
+
+# Optional: send bot log events (new sessions, tool calls, replies, errors)
+# to this channel. Plain text only — never mentions users.
+# Invite the bot to the channel first. Leave empty to disable.
+# Find a channel ID: click the channel name → about → scroll to the bottom.
+LOG_CHANNEL=
 ```
 
 > 💡 **Finding your Slack member ID:** click your avatar in Slack → **Profile** → **⋯** → **Copy member ID** (looks like `U0ABCDEF12`). The bot's member ID is also shown on the App's **Basic Information** page.
@@ -168,6 +177,27 @@ The dashboard is just a pretty way to manage the bot:
 - **Start / Stop** the bot process
 - **Live logs** (exactly what the bot prints)
 - **Auto-start** toggle — check it so the bot comes back automatically whenever the dashboard starts
+
+---
+
+## 🔌 Connecting MCP servers (optional)
+
+MCP (Model Context Protocol) is the standard way to give coding agents extra tools — GitHub, databases, browsers, your own APIs. Because the bot runs the *same* local opencode as your terminal, **any MCP server you add to opencode works through the bot automatically** (tools appear as `mcp__<server>__<tool>`).
+
+Add them to `opencode.json` (project root or `~/.config/opencode/opencode.json`), then restart the bot from the dashboard. Full instructions, examples, and troubleshooting: **[docs/mcp.md](docs/mcp.md)**.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "github": {
+      "type": "remote",
+      "url": "https://your-mcp-server.example.com/mcp",
+      "headers": { "Authorization": "Bearer {env:GITHUB_TOKEN}" }
+    }
+  }
+}
+```
 
 ---
 
@@ -249,14 +279,23 @@ Right now the dashboard dies if you close the terminal or reboot. This makes bot
    cp examples/launchd-tunnel.plist.example ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
    ```
 
-4. **Load both:**
+4. **Keep-awake agent** (recommended if the bot must run with the Mac closed/locked) — prevents the system from sleeping so the bot keeps responding:
+
+   ```bash
+   cp examples/launchd-keepawake.plist.example ~/Library/LaunchAgents/com.opencode.slack.keepawake.plist
+   ```
+
+   This runs `/usr/bin/caffeinate -dimsu`, which stops idle sleep. (Locking the screen is fine either way — processes keep running.)
+
+5. **Load all the agents you created:**
 
    ```bash
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.dashboard.plist
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.keepawake.plist
    ```
 
-5. **Useful commands:**
+6. **Useful commands:**
 
    ```bash
    launchctl list | grep opencode          # is it loaded?
@@ -290,7 +329,9 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 
 - **Personality & rules** — edit `instructions.md`. It's injected into every opencode session. Restart the bot from the dashboard after editing.
 - **Who can use it** — `ALLOWED_USERS` in `.env` (empty = everyone).
+- **Log channel** — set `LOG_CHANNEL` in `.env` to stream bot events to a Slack channel (plain text, no mentions).
 - **Reactions** — set `USE_REACTIONS=false` to stop the ⏳/✅ emoji.
+- **MCP servers** — edit `opencode.json` (see [docs/mcp.md](docs/mcp.md)).
 - **Ports** — `OPENCODE_PORT` and `DASHBOARD_PORT` in `.env` if 1707/8787 are taken.
 - **Instructions file path** — `INSTRUCTIONS_FILE` in `.env` to point at a different file.
 - **Max reply length** — `MAX_RESPONSE_LEN` at the top of `src/bot.ts` (long answers get split into multiple messages).
@@ -313,6 +354,7 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 | `Missing Slack credentials` | Fill in all three tokens in `.env`, restart the dashboard. |
 | Connected but never replies | Check the **Event Subscriptions** and **Bot Token Scopes** in Part 1 — the bot events `app_mention` and `message.im` must be subscribed. |
 | `chat.startStream failed` | The app needs **Agents & AI Apps** (Thinking Steps) enabled — see Slack's app settings; the bot falls back gracefully if unavailable. |
+| Log channel shows "someone" instead of names | Add the `users:read` bot scope in Slack, then reinstall the app and restart the bot. |
 | Port already in use (`1707` or `8787`) | Change `OPENCODE_PORT` / `DASHBOARD_PORT` in `.env`, or kill the stale process: `lsof -ti tcp:1707 \| xargs kill`. The dashboard already frees stale bots automatically. |
 | launchd won't start | Wrong `bun` path in the plist → run `which bun` and update it. Check `dashboard.err.log`. |
 | Tunnel shows 404 / bad gateway | Make sure the dashboard is running on `localhost:8787` and the `ingress` hostname matches what you routed. |
@@ -325,10 +367,12 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 ```
 opencode-slack/
 ├── src/
-│   ├── bot.ts        # the Slack bot (commands, sessions, thinking cards, pause/resume)
+│   ├── bot.ts        # the Slack bot (commands, sessions, thinking cards, pause/resume, log channel)
 │   └── server.ts     # the web dashboard (start/stop bot, live logs, PIN auth)
 ├── public/           # dashboard HTML/CSS/JS
-├── examples/         # launchd plist templates + cloudflared config template
+├── docs/
+│   └── mcp.md        # how to connect MCP servers to opencode (and the bot)
+├── examples/         # launchd plist templates (dashboard, tunnel, keep-awake) + cloudflared config
 ├── instructions.md   # custom instructions injected into every session
 ├── .env.example      # template for your .env (never commit .env!)
 └── package.json

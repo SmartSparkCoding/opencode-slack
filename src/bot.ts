@@ -12,6 +12,7 @@ const ALLOWED_USERS = (process.env.ALLOWED_USERS || "")
   .map((s) => s.trim())
   .filter(Boolean)
 const USE_REACTIONS = process.env.USE_REACTIONS !== "false"
+const LOG_CHANNEL = process.env.LOG_CHANNEL || ""
 const MAX_RESPONSE_LEN = 3500
 const INSTRUCTIONS_FILE =
   process.env.INSTRUCTIONS_FILE || join(new URL("..", import.meta.url).pathname, "instructions.md")
@@ -102,6 +103,33 @@ function directlyMentionsBot(raw: string) {
 function isAllowed(userId: string) {
   if (!userId) return true
   return ALLOWED_USERS.length === 0 || ALLOWED_USERS.includes(userId)
+}
+
+const userNames = new Map<string, string>()
+async function userName(userId: string): Promise<string> {
+  if (userNames.has(userId)) return userNames.get(userId) || "someone"
+  try {
+    const info = await app.client.users.info({ user: userId })
+    const name =
+      info.user?.profile?.display_name || info.user?.profile?.real_name || info.user?.real_name || "someone"
+    userNames.set(userId, name)
+    return name
+  } catch {
+    return "someone"
+  }
+}
+
+function threadLink(channel: string, ts: string) {
+  return `https://${teamId}.slack.com/archives/${channel}/p${ts.replace(".", "")}`
+}
+
+async function logSlack(message: string) {
+  if (!LOG_CHANNEL) return
+  try {
+    await app.client.chat.postMessage({ channel: LOG_CHANNEL, text: message })
+  } catch (e) {
+    console.error(`⚠️ logSlack failed: ${(e as Error).message}`)
+  }
 }
 
 async function slackCall(method: string, body: Record<string, unknown>) {
@@ -215,6 +243,7 @@ function onToolPart(part: ToolPart, session: Session) {
   if (!detail) detail = state.title || ""
   session.toolLog.push(`\`${part.tool}\`: ${detail}`)
   scheduleToolFlush(session)
+  void logSlack(`🧰 Tool: \`${part.tool}\`\n\`\`\`\n${detail.slice(0, 300)}\n\`\`\``)
 }
 
 void (async () => {
@@ -307,6 +336,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       ctl.abort()
       active.delete(key)
       console.log(`⏹ [${key}] stopping current response`)
+      void logSlack(`⏹ Stopped a run for ${await userName(userId)} — ${threadLink(channel, thread)}`)
       await app.client.chat
         .postMessage({ channel, thread_ts: thread, text: "⏹ Stopped." })
         .catch(() => {})
@@ -332,6 +362,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       ctl.abort()
       active.delete(key)
       console.log(`⏸ [${key}] pausing current response`)
+      void logSlack(`⏸ Paused a run for ${await userName(userId)} — ${threadLink(channel, thread)}`)
       const sent = await app.client.chat
         .postMessage({
           channel,
@@ -365,6 +396,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
 
   if (!isAllowed(userId)) {
     console.log(`⛔ Blocked <@${userId}> (not in ALLOWED_USERS)`)
+    void logSlack(`⛔ Blocked message from ${await userName(userId)} (not in ALLOWED_USERS) — ${threadLink(channel, thread)}`)
     await app.client.chat
       .postMessage({ channel, thread_ts: thread, text: "⛔ You're not in my allowed user list." })
       .catch(() => {})
@@ -372,10 +404,12 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
   }
 
   console.log(`📨 [${channel}] <@${userId}> ${text}`)
+  void logSlack(`📨 ${await userName(userId)}: ${text.slice(0, 200)} — ${threadLink(channel, thread)}`)
   let session = reused?.session
 
   if (!session) {
     console.log(`🆕 Creating opencode session for thread ${key}...`)
+    void logSlack(`🆕 New session for ${await userName(userId)} — ${threadLink(channel, thread)}`)
     const createResult = await opencode.client.session.create({
       body: { title: `Slack thread ${thread}` },
     })
@@ -478,6 +512,9 @@ async function runPrompt(session: Session, text: string) {
       tools === 1 ? "" : "s"
     }_`
     await postChunked(reply + footer, channel, thread)
+    void logSlack(
+      `💬 Reply posted (${reply.length} chars · ${elapsed}s · ${tools} tool${tools === 1 ? "" : "s"}) — ${threadLink(channel, thread)}`,
+    )
   } catch (e) {
     active.delete(key)
     if (ctl.signal.aborted) {
@@ -491,6 +528,7 @@ async function runPrompt(session: Session, text: string) {
       return
     }
     console.error(`💥 prompt threw: ${(e as Error).message}`)
+    void logSlack(`❌ Prompt error: ${(e as Error).message.slice(0, 200)} — ${threadLink(channel, thread)}`)
     await stopStream(session)
     await app.client.chat
       .postMessage({ channel, thread_ts: thread, text: `Error: ${(e as Error).message}` })
@@ -516,6 +554,7 @@ app.action("resume_btn", async ({ ack, body }) => {
     })
     .catch(() => {})
   console.log(`▶️ [${key}] resuming paused response`)
+  void logSlack(`▶️ Resumed paused session — ${threadLink(entry.session.channel, entry.session.thread)}`)
   await runPrompt(entry.session, "Continue where you left off.")
 })
 
@@ -544,3 +583,7 @@ app.event("message", async ({ message }) => {
 
 await app.start()
 console.log("⚡ Slack bot is running (socket mode). Mention me in a channel or DM me.")
+if (LOG_CHANNEL) {
+  void logSlack("⚡ Bot started and connected.")
+  console.log(`📋 Log channel configured: ${LOG_CHANNEL}`)
+}
