@@ -10,7 +10,7 @@ const BOT_SCRIPT = join(ROOT, "src", "bot.ts")
 const PID_FILE = join(ROOT, ".bot.pid")
 const STATE_FILE = join(ROOT, ".state.json")
 const PORT = Number(process.env.DASHBOARD_PORT || "8787")
-const HOST = process.env.HOST || "0.0.0.0"
+const HOST = process.env.HOST || "127.0.0.1"
 const OPENCODE_PORT = Number(process.env.OPENCODE_PORT || "1707")
 const MAX_LOGS = 2000
 

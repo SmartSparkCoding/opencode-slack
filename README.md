@@ -1,8 +1,8 @@
 # ⚡ OpenCode Slack Bot
 
-A Slack bot that runs **opencode** — an open-source AI coding agent — on your own server and lets you talk to it from Slack. Mention it in a channel or DM it, and it answers in Slack threads like a real teammate. It can read and edit files, run commands, and browse your projects, because it *is* a real coding agent running locally.
+A Slack bot that runs **opencode** — an open-source AI coding agent — on your own computer and lets you talk to it from Slack. Mention it in a channel or DM it, and it answers in Slack threads like a real teammate. It can read and edit files, run commands, and browse your projects, because it *is* a real coding agent running locally.
 
-Also includes a small web dashboard to start / stop the bot, watch its live logs, and toggle auto-start — it binds to `0.0.0.0` and is PIN-protected, so you can point a subdomain at it (e.g. a Hack Club Nest auto-proxy) and control it from anywhere.
+Also includes a small web dashboard to start / stop the bot, watch its live logs, and toggle auto-start — optionally exposed over the internet through a Cloudflare Tunnel so you can control it from your phone.
 
 ---
 
@@ -20,7 +20,7 @@ Also includes a small web dashboard to start / stop the bot, watch its live logs
 | 🔌 MCP servers | Any MCP server you configure for opencode (GitHub, databases, browsers…) works through the bot automatically. See [docs/mcp.md](docs/mcp.md). |
 | 📊 Dashboard | Start/stop the bot, live logs, auto-start toggle — all in a little web page. |
 | 🔐 PIN gate | Protect the dashboard with a PIN before exposing it on the internet. |
-| 🚀 Always-on | Runs as a `systemd` service with `Restart=always`: boots at startup and comes back after any crash. |
+| 🚀 Always-on | Runs as a macOS `launchd` service: boots at login, restarts if it crashes. |
 | 🛡️ Safety rails | `##`-prefixed messages are always ignored. `<>`-prefixed messages are ignored unless you mention the bot. |
 
 ---
@@ -37,27 +37,29 @@ Slack bot  ──►  embedded opencode server (local, port 1707)
           opencode agent (your local files, tools, model)
 ```
 
-The bot uses **Slack Socket Mode**, so Slack talks to your server over an *outgoing* WebSocket connection — **you don't need a public IP address or port forwarding for the bot to work**. The dashboard binds to `0.0.0.0`, so you can expose it with any reverse proxy or the port-mapping feature your host provides (e.g. a Hack Club Nest subdomain).
+The bot uses **Slack Socket Mode**, so Slack talks to your machine over an *outgoing* WebSocket connection — **you don't need a public IP address or port forwarding for the bot to work**. The Cloudflare Tunnel in this guide is only needed if you also want to reach the web dashboard from outside your home/office network.
 
 ---
 
 ## 🧰 Prerequisites (do these once)
 
-On your server (a Hack Club Nest, a VPS, any Linux box — or your own computer for testing):
+1. **Install Bun** (JavaScript runtime, one command). Open **Terminal** (press `Cmd+Space`, type "Terminal", hit Enter) and paste:
 
-1. **Install Bun** (JavaScript runtime):
    ```bash
    curl -fsSL https://bun.sh/install | bash
    ```
-2. **Install opencode** (the AI agent the bot wraps):
+
+   Close and reopen Terminal afterwards.
+
+2. **Install Git** (probably already there — check with `git --version`; if it errors, get it from https://git-scm.com/downloads).
+
+3. **Install Cloudflared** (only needed for the tunnel section):
+
    ```bash
-   curl -fsSL https://opencode.ai/install | bash
+   brew install cloudflared
    ```
-   Then log in so it can talk to a model:
-   ```bash
-   opencode auth login
-   ```
-3. **Install Git** (usually already there — check with `git --version`).
+
+   If `brew` isn't installed, get it from https://brew.sh.
 
 That's it. No other software needed.
 
@@ -129,9 +131,6 @@ SLACK_SIGNING_SECRET=YOUR-SIGNING-SECRET
 OPENCODE_PORT=1707
 DASHBOARD_PORT=8787
 
-# Interface the dashboard binds to (0.0.0.0 = all interfaces, so a subdomain/port-forward can reach it)
-HOST=0.0.0.0
-
 # PIN to protect the web dashboard (REQUIRED before exposing it online)
 # e.g. DASHBOARD_PIN=1234
 DASHBOARD_PIN=
@@ -202,42 +201,111 @@ Add them to `opencode.json` (project root or `~/.config/opencode/opencode.json`)
 
 ---
 
-## 🌍 Part 6 — Deploy on a server (e.g. Hack Club Nest)
+## 🌍 Part 6 — Cloudflare Tunnel (optional, control it from anywhere)
 
-The bot's Slack connection is an *outgoing* WebSocket, so it works from any always-on machine. For the dashboard to be reachable from outside, give it a public URL with whatever your host provides — Hack Club Nests let you point a subdomain (like `mini-jacob.hackclub.app`) at a local port, so there's **no tunnel or Cloudflare needed**.
+The tunnel gives your dashboard a public URL like `https://bot.example.com` so you can start/stop the bot and watch logs from your phone, anywhere. **Nothing about the bot requires this** — only do it if you want remote dashboard access.
 
-> ⚠️ **Before exposing it:** set a real `DASHBOARD_PIN` in `.env`. The dashboard is the only door to starting/stopping the bot and running commands on your server — keep the PIN strong.
+> ⚠️ **Before you do this:** set a real `DASHBOARD_PIN` in `.env` and restart the dashboard. Otherwise *anyone* with the URL could control your bot (and your machine).
 
-1. **Get the code on the server:**
-
-   ```bash
-   git clone https://github.com/SmartSparkCoding/opencode-slack.git
-   cd opencode-slack
-   bun install
-   ```
-
-2. **Create `.env`** from `.env.example` and fill in the Slack tokens, `ALLOWED_USERS`, `LOG_CHANNEL`, and a `DASHBOARD_PIN`.
-
-   > ℹ️ **On a Hack Club Nest, port 8787 is already used** by the Nest's status server — set `DASHBOARD_PORT=8788` (or any free port) and remember the port for step 4.
-
-3. **Run it forever with systemd** (restarts automatically on crash and at boot). A ready-to-edit unit ships in `examples/opencode-slack.service`:
+1. **Log in to Cloudflare:**
 
    ```bash
-   cp examples/opencode-slack.service /etc/systemd/system/opencode-slack.service
-   # edit the paths inside if bun/opencode aren't in /root/.bun/bin and /root/.opencode/bin
-   systemctl daemon-reload
-   systemctl enable --now opencode-slack
+   cloudflared tunnel login
    ```
 
-   Useful commands:
+   A browser tab opens — pick the domain you own (any free Cloudflare account works).
+
+2. **Create a tunnel:**
 
    ```bash
-   systemctl status opencode-slack                 # is it running?
-   systemctl restart opencode-slack                # restart after code/config changes
-   journalctl -u opencode-slack -f                 # follow the logs
+   cloudflared tunnel create opencode-slack
    ```
 
-4. **Point your subdomain at the dashboard port.** In the Hack Club Nest panel, forward a subdomain (e.g. `mini-jacob.hackclub.app`) to port **`$DASHBOARD_PORT`** (8788 if you changed it). Visit it in a browser — you should see the PIN login page. Done. 🎉
+   This prints a **tunnel UUID** (like `2c5508dd-...`). Write it down.
+
+3. **Create the config file** `~/.cloudflared/opencode-slack.yml`:
+
+   ```yaml
+   tunnel: YOUR-TUNNEL-UUID
+   credentials-file: /Users/YOURNAME/.cloudflared/YOUR-TUNNEL-UUID.json
+
+   ingress:
+     - hostname: bot.example.com
+       service: http://localhost:8787
+     - service: http_status:404
+   ```
+
+   A ready-to-edit copy ships in `examples/cloudflared.yml.example`.
+
+4. **Route your subdomain** (e.g. `bot.example.com`) to the tunnel:
+
+   ```bash
+   cloudflared tunnel route dns opencode-slack bot.example.com
+   ```
+
+5. **Run it** (in a terminal, just to test):
+
+   ```bash
+   cloudflared tunnel run --config ~/.cloudflared/opencode-slack.yml opencode-slack
+   ```
+
+   Leave that running and visit **https://bot.example.com** — you should see the dashboard's login page. Enter your PIN. Done. 🎉
+
+   Press `Ctrl+C` to stop the tunnel when you're done testing.
+
+---
+
+## 🔁 Part 7 — Run it forever (auto-start on macOS with launchd)
+
+Right now the dashboard dies if you close the terminal or reboot. This makes both the dashboard (→ bot) and the tunnel (→ public URL) start automatically at login and restart after crashes.
+
+1. **Test that `bun` is on the PATH launchd can see:**
+   ```bash
+   which bun cloudflared
+   ```
+   (Write down the full paths — you'll paste them into the plist files.)
+
+2. **Dashboard agent** — copy the template and edit the paths:
+
+   ```bash
+   cp examples/launchd-dashboard.plist.example ~/Library/LaunchAgents/com.opencode.slack.dashboard.plist
+   ```
+
+   Open `~/Library/LaunchAgents/com.opencode.slack.dashboard.plist`, replace every `/Users/YOURNAME` with your real home folder, and make sure the `bun` path matches `which bun`.
+
+3. **Tunnel agent** (only if you set up the tunnel) — same idea:
+
+   ```bash
+   cp examples/launchd-tunnel.plist.example ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
+   ```
+
+4. **Keep-awake agent** (recommended if the bot must run with the Mac closed/locked) — prevents the system from sleeping so the bot keeps responding:
+
+   ```bash
+   cp examples/launchd-keepawake.plist.example ~/Library/LaunchAgents/com.opencode.slack.keepawake.plist
+   ```
+
+   This runs `/usr/bin/caffeinate -dimsu`, which stops idle sleep. (Locking the screen is fine either way — processes keep running.)
+
+5. **Load all the agents you created:**
+
+   ```bash
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.dashboard.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.keepawake.plist
+   ```
+
+6. **Useful commands:**
+
+   ```bash
+   launchctl list | grep opencode          # is it loaded?
+   launchctl kickstart -k gui/$(id -u)/com.opencode.slack.dashboard   # restart (after code changes)
+   launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.opencode.slack.dashboard.plist  # stop
+   ```
+
+   Log files land in `~/opencode-slack/dashboard.out.log` and `~/.cloudflared/tunnel.err.log`.
+
+> 🐛 **Troubleshooting launchd:** if it doesn't start, the usual cause is a wrong `bun` path or a plist saved with the wrong name. Check the log files listed above, then `launchctl list | grep opencode`.
 
 ---
 
@@ -264,7 +332,7 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 - **Log channel** — set `LOG_CHANNEL` in `.env` to stream bot events to a Slack channel (plain text, no mentions).
 - **Reactions** — set `USE_REACTIONS=false` to stop the ⏳/✅ emoji.
 - **MCP servers** — edit `opencode.json` (see [docs/mcp.md](docs/mcp.md)).
-- **Ports** — `OPENCODE_PORT` and `DASHBOARD_PORT` in `.env` if 1707/8787 are taken (8787 is taken on Hack Club Nests).
+- **Ports** — `OPENCODE_PORT` and `DASHBOARD_PORT` in `.env` if 1707/8787 are taken.
 - **Instructions file path** — `INSTRUCTIONS_FILE` in `.env` to point at a different file.
 - **Max reply length** — `MAX_RESPONSE_LEN` at the top of `src/bot.ts` (long answers get split into multiple messages).
 
@@ -272,7 +340,7 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 
 ## 🔐 Security notes
 
-- The dashboard binds to `0.0.0.0`, so anything on the network (or a public subdomain) can reach its login page. **Set a strong `DASHBOARD_PIN`** or it's an open door to running commands on your server.
+- The dashboard is **not** a hardened remote-admin tool. It's meant to run on your own machine/LAN. Only expose it via the tunnel if you set a strong `DASHBOARD_PIN`, and prefer keeping the tunnel to just yourself.
 - The bot can run arbitrary commands on your machine (it's a coding agent — that's the point). Only grant it to people you trust: set `ALLOWED_USERS`.
 - `!stop` / `!pause` send a real interrupt to the opencode server, so an aborted run doesn't keep your CPU busy or block the next message.
 - The `.env` file holds real secrets — it's git-ignored, never commit it. A committed example lives in `.env.example`.
@@ -287,10 +355,9 @@ Each reply ends with a tiny footer: `_⚡ 12.4s · 1,234 tokens · 5 tools_` so 
 | Connected but never replies | Check the **Event Subscriptions** and **Bot Token Scopes** in Part 1 — the bot events `app_mention` and `message.im` must be subscribed. |
 | `chat.startStream failed` | The app needs **Agents & AI Apps** (Thinking Steps) enabled — see Slack's app settings; the bot falls back gracefully if unavailable. |
 | Log channel shows "someone" instead of names | Add the `users:read` bot scope in Slack, then reinstall the app and restart the bot. |
-| Port already in use (`1707` or `8787`) | Change `OPENCODE_PORT` / `DASHBOARD_PORT` in `.env`, or kill the stale process. On a Hack Club Nest, 8787 is taken by the Nest's status server — use `DASHBOARD_PORT=8788`. |
-| systemd service won't start | Check `journalctl -u opencode-slack -n 50` — the usual cause is a wrong `bun`/`opencode` path in the unit, or `opencode auth login` not done yet. |
-| Bot starts but prompts fail | Run `opencode auth login` on the server (it's a separate machine from your laptop — it needs its own login). |
-| Subdomain shows 404 / nothing | Make sure the dashboard is actually listening: `curl http://localhost:$DASHBOARD_PORT/api/status` on the server, then point your Nest subdomain at the *same* port. |
+| Port already in use (`1707` or `8787`) | Change `OPENCODE_PORT` / `DASHBOARD_PORT` in `.env`, or kill the stale process: `lsof -ti tcp:1707 \| xargs kill`. The dashboard already frees stale bots automatically. |
+| launchd won't start | Wrong `bun` path in the plist → run `which bun` and update it. Check `dashboard.err.log`. |
+| Tunnel shows 404 / bad gateway | Make sure the dashboard is running on `localhost:8787` and the `ingress` hostname matches what you routed. |
 | Reply is super long and cut off | Long replies are split into multiple messages automatically (`MAX_RESPONSE_LEN`). |
 
 ---
@@ -305,7 +372,7 @@ opencode-slack/
 ├── public/           # dashboard HTML/CSS/JS
 ├── docs/
 │   └── mcp.md        # how to connect MCP servers to opencode (and the bot)
-├── examples/         # systemd service unit for always-on deployment
+├── examples/         # launchd plist templates (dashboard, tunnel, keep-awake) + cloudflared config
 ├── instructions.md   # custom instructions injected into every session
 ├── .env.example      # template for your .env (never commit .env!)
 └── package.json
