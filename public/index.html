@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenCode Slack Bot</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --amber: #d29922;
+    --blue: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .status-line { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 12px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+  .dot.running { background: var(--green); }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 12px; font-weight: 600;
+  }
+  .pill.on { background: rgba(63,185,80,.15); color: var(--green); }
+  .pill.off { background: rgba(248,81,73,.15); color: var(--red); }
+  .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+  .row .k { color: var(--muted); }
+  .btns { display: flex; gap: 8px; margin-top: 14px; }
+  button {
+    flex: 1; padding: 9px 0; border: none; border-radius: 6px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    background: #21262d; color: var(--text);
+  }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.start { background: var(--green); color: #0d1117; }
+  button.start:hover:not(:disabled) { background: #2ea043; }
+  button.stop { background: var(--red); color: #fff; }
+  button.stop:hover:not(:disabled) { background: #da3633; }
+  .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
+  .config-note { font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .config-note .bad { color: var(--red); }
+  .config-note .ok { color: var(--green); }
+  #logs {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.5;
+    height: 480px; overflow-y: auto;
+    background: #010409; border-radius: 6px; padding: 10px;
+  }
+  #logs .warn { color: var(--amber); }
+  #logs .error { color: var(--red); }
+  #logs .info { color: var(--text); }
+  #logs .t { color: var(--muted); margin-right: 8px; }
+</style>
+</head>
+<body>
+  <h1>OpenCode Slack Bot <a href="#" id="logout" title="Log out" style="color:var(--muted);text-decoration:none;font-size:13px;margin-left:10px">log out</a></h1>
+  <div class="sub">Runs on this Mac · Socket Mode · responds to <b>@mentions</b> &amp; DMs</div>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <div class="status-line">
+          <span class="dot" id="dot"></span>
+          <b id="state">unknown</b>
+          <span class="pill off" id="pill">OFFLINE</span>
+        </div>
+        <div class="row"><span class="k">PID</span><span id="pid">—</span></div>
+        <div class="row"><span class="k">Uptime</span><span id="uptime">—</span></div>
+        <div class="row"><span class="k">Opencode port</span><span id="ocport">—</span></div>
+        <div class="btns">
+          <button class="start" id="start" disabled>Start</button>
+          <button class="stop" id="stop" disabled>Stop</button>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="autostart" />
+          <label for="autostart">Auto-start bot with dashboard</label>
+        </div>
+        <div class="config-note" id="creds"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sub" style="margin-bottom:8px">Live logs</div>
+      <div id="logs"></div>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const dot = $("dot"), stateEl = $("state"), pill = $("pill")
+const pidEl = $("pid"), upEl = $("uptime"), ocEl = $("ocport")
+const startBtn = $("start"), stopBtn = $("stop"), autoEl = $("autostart")
+const logBox = $("logs"), credsEl = $("creds")
+
+let lastLogId = 0
+let startedAt = null
+
+function fmt(ms) {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return s + "s"
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + "m " + (s % 60) + "s"
+  return Math.floor(m / 60) + "h " + (m % 60) + "m"
+}
+
+function applyStatus(status, config) {
+  const running = status.running
+  dot.classList.toggle("running", running)
+  stateEl.textContent = running ? "running" : "stopped"
+  pill.textContent = running ? "ONLINE" : "OFFLINE"
+  pill.className = "pill " + (running ? "on" : "off")
+  pidEl.textContent = running ? (status.pid || "?") : "—"
+  startedAt = running ? (status.startedAt || Date.now()) : null
+  if (config) {
+    ocEl.textContent = String(config.opencodePort)
+    const missing = []
+    if (!config.slackBotToken) missing.push("SLACK_BOT_TOKEN")
+    if (!config.slackSigningSecret) missing.push("SLACK_SIGNING_SECRET")
+    if (!config.slackAppToken) missing.push("SLACK_APP_TOKEN")
+    credsEl.innerHTML = missing.length
+      ? 'Missing: <span class="bad">' + missing.join(", ") + "</span> — edit <code>.env</code> then restart the dashboard."
+      : "Slack credentials: <span class=\"ok\">configured ✓</span>"
+    autoEl.checked = status.autoStart
+  }
+  startBtn.disabled = running
+  stopBtn.disabled = !running
+}
+
+function addLine(entry) {
+  const d = document.createElement("div")
+  const cls = entry.level === "error" ? "error" : entry.level === "warn" ? "warn" : "info"
+  d.className = cls
+  d.innerHTML = '<span class="t">' + entry.at + "</span>" + escapeHtml(entry.line)
+  logBox.appendChild(d)
+  while (logBox.children.length > 500) logBox.removeChild(logBox.firstChild)
+  logBox.scrollTop = logBox.scrollHeight
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+async function pollStatus() {
+  const r = await fetch("/api/status")
+  if (r.status === 401) { window.location.href = "/login"; return }
+  const j = await r.json()
+  applyStatus(j.status, j.config)
+}
+
+async function pollLogs() {
+  const r = await fetch("/api/logs?after=" + lastLogId)
+  if (r.status === 401) { window.location.href = "/login"; return }
+  const j = await r.json()
+  lastLogId = j.lastId
+  for (const e of j.entries) addLine(e)
+}
+
+function openEvents() {
+  const es = new EventSource("/api/events")
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data)
+    if (ev.type === "status") applyStatus(ev.status, null)
+    if (ev.type === "log") { lastLogId = ev.entry.id; addLine(ev.entry) }
+  }
+  es.onerror = () => setTimeout(openEvents, 2000)
+}
+
+setInterval(() => {
+  if (startedAt) upEl.textContent = fmt(Date.now() - startedAt)
+  else upEl.textContent = "—"
+}, 1000)
+
+startBtn.onclick = () => fetch("/api/start", { method: "POST" }).then(pollStatus)
+stopBtn.onclick = () => fetch("/api/stop", { method: "POST" }).then(pollStatus)
+document.getElementById("logout").onclick = async (e) => {
+  e.preventDefault()
+  await fetch("/api/logout", { method: "POST" })
+  window.location.href = "/login"
+}
+autoEl.onchange = () =>
+  fetch("/api/config?autoStart=" + (autoEl.checked ? 1 : 0), { method: "POST" })
+
+pollStatus()
+pollLogs()
+openEvents()
+setInterval(pollLogs, 3000)
+</script>
+</body>
+</html>

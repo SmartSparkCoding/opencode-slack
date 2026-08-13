@@ -1,0 +1,23 @@
+# Secrets — NEVER commit these
+.env
+
+# Runtime state / logs
+.bot.pid
+.bot-trace.log
+.state.json
+dashboard.out.log
+dashboard.err.log
+*.log
+
+# Dependencies
+node_modules/
+
+# macOS junk
+.DS_Store
+
+# Local images / temp
+*.png
+*.jpeg
+*.jpg
+*.gif
+/tmp/

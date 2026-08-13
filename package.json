@@ -1,0 +1,15 @@
+{
+  "name": "opencode-slack",
+  "version": "1.0.0",
+  "description": "A Slack bot that lets you talk to a local opencode coding agent — threads, sessions, thinking cards, !stop / !pause, web dashboard, and Cloudflare tunnel support.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bot": "bun run src/bot.ts",
+    "dashboard": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.18.18",
+    "@slack/bolt": "^3.22.0"
+  }
+}

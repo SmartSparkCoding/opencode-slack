@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Auto-start the Cloudflare tunnel when your Mac boots or logs in.
+  See README.md "Run it forever (auto-start on macOS)" for the full setup.
+
+  Steps:
+    1. Set up the tunnel first (cloudflared tunnel login / create / route).
+    2. Replace /Users/YOURNAME and the config path below.
+    3. Copy to ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
+    4. launchctl load ~/Library/LaunchAgents/com.opencode.slack.tunnel.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opencode.slack.tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/cloudflared</string>
+    <string>tunnel</string>
+    <string>--config</string>
+    <string>/Users/YOURNAME/.cloudflared/opencode-slack.yml</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOURNAME</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/YOURNAME</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOURNAME/.cloudflared/tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOURNAME/.cloudflared/tunnel.err.log</string>
+</dict>
+</plist>
