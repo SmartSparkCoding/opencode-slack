@@ -88,6 +88,7 @@ type Session = {
   streamStartPromise?: Promise<void>
   toolLog: string[]
   flushTimer?: ReturnType<typeof setTimeout>
+  tempUsers: Set<string>
 }
 const sessions = new Map<string, Session>()
 const active = new Map<string, AbortController>()
@@ -101,9 +102,12 @@ function directlyMentionsBot(raw: string) {
   return botUserId ? raw.includes(`<@${botUserId}>`) : false
 }
 
-function isAllowed(userId: string) {
+function isAllowed(userId: string, session?: Session) {
   if (!userId) return true
-  return ALLOWED_USERS.length === 0 || ALLOWED_USERS.includes(userId)
+  if (ALLOWED_USERS.length === 0) return true
+  if (ALLOWED_USERS.includes(userId)) return true
+  if (session?.tempUsers?.has(userId)) return true
+  return false
 }
 
 const userNames = new Map<string, string>()
@@ -316,6 +320,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       "",
       "`!stop` — stop the current response",
       "`!pause` — pause the current response (resume button appears)",
+      "`!tempuser @user` — grant a user temporary access to this session",
       "`!sessions` — list all active opencode sessions with links",
       "`!help` — show this message (only visible to you)",
       "",
@@ -374,6 +379,27 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
         .postMessage({ channel, thread_ts: thread, text: "📋 Couldn't list sessions — the opencode server may not be running." })
         .catch(() => {})
     }
+    return
+  }
+
+  if (/^!tempuser\s+<@([A-Z0-9]+)>$/i.test(text)) {
+    const tempId = RegExp.$1
+    const session = sessions.get(`${channel}-${thread}`)
+    if (!session) {
+      await app.client.chat
+        .postMessage({ channel, thread_ts: thread, text: "No active session in this thread." })
+        .catch(() => {})
+      return
+    }
+    session.tempUsers.add(tempId)
+    const name = await userName(tempId)
+    console.log(`👤 [${channel}-${thread}] ${await userName(userId)} granted temp access to ${name}`)
+    void logSlack(
+      `👤 Temp user ${name} added to session by ${await userName(userId)} — ${threadLink(channel, thread)}`,
+    )
+    await app.client.chat
+      .postMessage({ channel, thread_ts: thread, text: `👤 ${name} has been granted access to this session.` })
+      .catch(() => {})
     return
   }
 
@@ -455,7 +481,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     return
   }
 
-  if (!isAllowed(userId)) {
+  if (!isAllowed(userId, reused?.session)) {
     console.log(`⛔ Blocked <@${userId}> (not in ALLOWED_USERS)`)
     void logSlack(`⛔ Blocked message from ${await userName(userId)} (not in ALLOWED_USERS) — ${threadLink(channel, thread)}`)
     await app.client.chat
@@ -489,6 +515,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       userId,
       createdAt: Date.now(),
       toolLog: [],
+      tempUsers: new Set(),
     }
     sessions.set(key, session)
 
@@ -620,7 +647,12 @@ app.action("resume_btn", async ({ ack, body }) => {
 })
 
 app.event("app_mention", async ({ event }) => {
-  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, event.text || "", event.ts)
+  const raw = event.text || ""
+  if (/^!help\b/i.test(raw) || /^!tempuser\b/i.test(raw)) {
+    await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, raw, event.ts)
+    return
+  }
+  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, raw, event.ts)
 })
 
 app.event("message", async ({ message }) => {
@@ -637,8 +669,11 @@ app.event("message", async ({ message }) => {
   }
 
   if (!msg.thread_ts) return
-  if (!sessions.has(`${msg.channel}-${msg.thread_ts}`)) return
-  if (directlyMentionsBot(msg.text)) return
+  if (!msg.text) return
+  const cleanText = msg.text.replace(/<@[A-Z0-9]+>/g, "").trim()
+  const isQuickCmd = /^!help$/i.test(cleanText) || /^!tempuser\s+<@[A-Z0-9]+>$/i.test(cleanText)
+  if (!isQuickCmd && !sessions.has(`${msg.channel}-${msg.thread_ts}`)) return
+  if (!isQuickCmd && directlyMentionsBot(msg.text)) return
   await handleIncoming(msg.channel, msg.thread_ts, msg.user, msg.text, msg.ts)
 })
 
