@@ -2,6 +2,7 @@ import { App } from "@slack/bolt"
 import { createOpencode, type ToolPart } from "@opencode-ai/sdk"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { gfmToMrkdwn } from "./markdown.ts"
 
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || ""
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || ""
@@ -274,11 +275,11 @@ async function postChunked(text: string, channel: string, thread: string) {
   }
   if (rest) chunks.push(rest)
   for (const chunk of chunks) {
-    await app.client.chat.postMessage({ channel, thread_ts: thread, text: chunk })
+    await app.client.chat.postMessage({ channel, thread_ts: thread, text: gfmToMrkdwn(chunk) })
   }
 }
 
-function findOrReuseSession(channel: string, thread: string, userId: string) {
+function findOrReuseSession(channel: string, thread: string) {
   let session = sessions.get(`${channel}-${thread}`)
   if (session) return { session, channel, thread }
 
@@ -291,19 +292,11 @@ function findOrReuseSession(channel: string, thread: string, userId: string) {
         return { session: s, channel, thread }
       }
     }
-  } else {
-    let best: Session | undefined
-    for (const s of sessions.values()) {
-      if (s.channel === channel && s.userId === userId && (!best || s.createdAt > best.createdAt)) {
-        best = s
-      }
-    }
-    if (best) return { session: best, channel, thread: best.thread }
   }
   return null
 }
 
-async function handleIncoming(channel: string, thread: string, userId: string, rawText: string) {
+async function handleIncoming(channel: string, thread: string, userId: string, rawText: string, messageTs?: string) {
   const text = stripMentions(rawText)
   if (!text) return
 
@@ -316,7 +309,75 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     return
   }
 
-  const reused = findOrReuseSession(channel, thread, userId)
+  if (/^!help$/i.test(text)) {
+      await app.client.chat.delete({ channel, ts: messageTs || thread }).catch(() => {})
+    const help = [
+      "**Available commands**",
+      "",
+      "`!stop` — stop the current response",
+      "`!pause` — pause the current response (resume button appears)",
+      "`!sessions` — list all active opencode sessions with links",
+      "`!help` — show this message (only visible to you)",
+      "",
+      "**Rules**",
+      "• Prefix a message with `##` to ignore it entirely",
+      "• Prefix with `<>` (without mentioning me) to ignore it",
+      "• Mention me in a thread to start a new session there",
+    ].join("\n")
+    await app.client.chat
+      .postEphemeral({ channel, user: userId, text: help })
+      .catch(() => {})
+    console.log(`❓ [${key || `${channel}-${thread}`}] ${await userName(userId)} requested help`)
+    return
+  }
+
+  if (/^!sessions$/i.test(text)) {
+    const keyHint = `${channel}-${thread}`
+    console.log(`📋 [${keyHint}] ${await userName(userId)} listing sessions`)
+    try {
+      const result = await opencode.client.session.list()
+      const list = (result.data || []) as any[]
+      if (list.length === 0) {
+        await app.client.chat
+          .postMessage({ channel, thread_ts: thread, text: "📋 No sessions found." })
+          .catch(() => {})
+        return
+      }
+      const lines: string[] = []
+      for (const s of list as any[]) {
+        const title = s.title || s.id
+        const age = Date.now() - (s.time?.created || 0)
+        const ageStr =
+          age < 60_000
+            ? `${Math.floor(age / 1000)}s ago`
+            : age < 3_600_000
+              ? `${Math.floor(age / 60_000)}m ago`
+              : age < 86_400_000
+                ? `${Math.floor(age / 3_600_000)}h ago`
+                : `${Math.floor(age / 86_400_000)}d ago`
+        let link = s.share?.url
+        if (!link) {
+          try {
+            const share = await opencode.client.session.share({ path: { id: s.id } })
+            link = share.data?.share?.url
+          } catch {}
+        }
+        lines.push(link ? `• [${title}](${link}) — ${ageStr}` : `• ${title} — ${ageStr}`)
+      }
+      const header = `**📋 Sessions** (${list.length} total)`
+      await app.client.chat
+        .postMessage({ channel, thread_ts: thread, text: `${header}\n${lines.join("\n")}` })
+        .catch(() => {})
+    } catch (e) {
+      console.error(`📋 sessions list failed: ${(e as Error).message}`)
+      await app.client.chat
+        .postMessage({ channel, thread_ts: thread, text: "📋 Couldn't list sessions — the opencode server may not be running." })
+        .catch(() => {})
+    }
+    return
+  }
+
+  const reused = findOrReuseSession(channel, thread)
   if (reused) {
     channel = reused.channel
     thread = reused.thread
@@ -559,7 +620,7 @@ app.action("resume_btn", async ({ ack, body }) => {
 })
 
 app.event("app_mention", async ({ event }) => {
-  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, event.text || "")
+  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, event.text || "", event.ts)
 })
 
 app.event("message", async ({ message }) => {
@@ -571,14 +632,14 @@ app.event("message", async ({ message }) => {
 
   if (msg.channel_type === "im") {
     if (directlyMentionsBot(msg.text)) return
-    await handleIncoming(msg.channel, msg.thread_ts || msg.ts, msg.user, msg.text)
+    await handleIncoming(msg.channel, msg.thread_ts || msg.ts, msg.user, msg.text, msg.ts)
     return
   }
 
   if (!msg.thread_ts) return
   if (!sessions.has(`${msg.channel}-${msg.thread_ts}`)) return
   if (directlyMentionsBot(msg.text)) return
-  await handleIncoming(msg.channel, msg.thread_ts, msg.user, msg.text)
+  await handleIncoming(msg.channel, msg.thread_ts, msg.user, msg.text, msg.ts)
 })
 
 await app.start()

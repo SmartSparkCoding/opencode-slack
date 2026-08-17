@@ -17,6 +17,8 @@ Slack etiquette (enforced by the bot code, but keep it in mind):
 - Never respond to messages that start with `<>` unless the bot was directly mentioned.
 - `@your-bot !stop` interrupts the current response; a later message resumes normally.
 - `@your-bot !pause` pauses the current response and shows a Resume button; clicking it continues the same session.
+- `@your-bot !sessions` lists all active opencode sessions with shareable links.
+- `@your-bot !help` shows all available commands (ephemeral — only visible to you). The `!help` message itself is deleted.
 
 How I run (useful when asked how to deploy, restart, or debug me):
 - I am the **opencode-slack** bot: a Slack app that wraps a local opencode agent, running on the user's own macOS machine.

@@ -295,6 +295,8 @@ function configSnapshot() {
 }
 
 const server = createServer(async (req, res) => {
+  res.on("error", () => {})
+  req.on("error", () => {})
   const url = new URL(req.url || "/", `http://localhost:${PORT}`)
 
   if (url.pathname === "/api/login" && req.method === "POST") {
