@@ -359,8 +359,10 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     return
   }
 
+  const noBotMention = rawText.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim()
+
   if (/^!help$/i.test(text)) {
-      await app.client.chat.delete({ channel, ts: messageTs || thread }).catch(() => {})
+    await app.client.chat.delete({ channel, ts: messageTs || thread }).catch(() => {})
     const help = [
       "**Available commands**",
       "",
@@ -375,10 +377,15 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       "• Prefix with `<>` (without mentioning me) to ignore it",
       "• Mention me in a thread to start a new session there",
     ].join("\n")
-    await app.client.chat
-      .postEphemeral({ channel, user: userId, text: help })
-      .catch(() => {})
+    const sent = await app.client.chat
+      .postMessage({ channel, thread_ts: thread, text: help })
+      .catch(() => null)
     console.log(`❓ [${channel}-${thread}] ${await userName(userId)} requested help`)
+    if (sent?.ts) {
+      setTimeout(() => {
+        app.client.chat.delete({ channel, ts: sent.ts }).catch(() => {})
+      }, 15_000).unref()
+    }
     return
   }
 
@@ -423,7 +430,6 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       await app.client.chat
         .postMessage({ channel, thread_ts: thread, text: "Sessions", blocks })
         .catch(() => {})
-        .catch(() => {})
     } catch (e) {
       console.error(`📋 sessions list failed: ${(e as Error).message}`)
       await app.client.chat
@@ -433,9 +439,14 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     return
   }
 
-  const noBotMention = rawText.replace(/<@${botUserId}>/g, "").trim()
+  if (/^!tempuser$/i.test(noBotMention)) {
+    await app.client.chat
+      .postMessage({ channel, thread_ts: thread, text: "Usage: `!tempuser @user` — specify who to add." })
+      .catch(() => {})
+    return
+  }
 
-  if (/^!tempuser\s+<@([A-Z0-9]+)>$/i.test(noBotMention)) {
+  if (/^!tempuser\s+<@([A-Z0-9]+)>/i.test(noBotMention)) {
     const tempId = RegExp.$1
     const session = sessions.get(`${channel}-${thread}`)
     if (!session) {
