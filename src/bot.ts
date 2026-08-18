@@ -1,6 +1,6 @@
 import { App } from "@slack/bolt"
 import { createOpencode, type ToolPart } from "@opencode-ai/sdk"
-import { readFileSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { gfmToMrkdwn } from "./markdown.ts"
 
@@ -17,6 +17,7 @@ const LOG_CHANNEL = process.env.LOG_CHANNEL || ""
 const MAX_RESPONSE_LEN = 3500
 const INSTRUCTIONS_FILE =
   process.env.INSTRUCTIONS_FILE || join(new URL("..", import.meta.url).pathname, "instructions.md")
+const SESSIONS_FILE = join(new URL("..", import.meta.url).pathname, ".sessions.json")
 
 process.stdout.on("error", () => {})
 process.stderr.on("error", () => {})
@@ -47,6 +48,7 @@ const opencode = await createOpencode({
   config: { instructions },
 })
 console.log(`✅ Opencode server ready at ${opencode.server.url}`)
+loadSessions()
 
 const shutdown = () => {
   console.log("🛑 Shutting down — closing embedded opencode server...")
@@ -109,6 +111,50 @@ function isAllowed(userId: string, session?: Session) {
   if (session?.tempUsers?.has(userId)) return true
   return false
 }
+
+function saveSessions() {
+  const data: Record<string, Omit<Session, "streamStartPromise" | "flushTimer"> & { tempUsers: string[] }> = {}
+  for (const [key, s] of sessions) {
+    data[key] = {
+      sessionId: s.sessionId,
+      channel: s.channel,
+      thread: s.thread,
+      userId: s.userId,
+      createdAt: s.createdAt,
+      toolLog: s.toolLog,
+      tempUsers: [...s.tempUsers],
+    }
+  }
+  try {
+    writeFileSync(SESSIONS_FILE, JSON.stringify(data, null, 2))
+  } catch (e) {
+    console.error(`⚠️ saveSessions failed: ${(e as Error).message}`)
+  }
+}
+
+function loadSessions() {
+  try {
+    if (!existsSync(SESSIONS_FILE)) return
+    const raw = JSON.parse(readFileSync(SESSIONS_FILE, "utf8"))
+    for (const [key, s] of Object.entries(raw) as [string, any][]) {
+      sessions.set(key, {
+        sessionId: s.sessionId,
+        channel: s.channel,
+        thread: s.thread,
+        userId: s.userId,
+        createdAt: s.createdAt || 0,
+        toolLog: s.toolLog || [],
+        tempUsers: new Set(s.tempUsers || []),
+      })
+    }
+    console.log(`📂 Loaded ${sessions.size} sessions from disk`)
+  } catch (e) {
+    console.error(`⚠️ loadSessions failed: ${(e as Error).message}`)
+  }
+}
+
+process.on("SIGTERM", () => { saveSessions() })
+process.on("SIGINT", () => { saveSessions() })
 
 const userNames = new Map<string, string>()
 async function userName(userId: string): Promise<string> {
@@ -332,34 +378,35 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     await app.client.chat
       .postEphemeral({ channel, user: userId, text: help })
       .catch(() => {})
-    console.log(`❓ [${key || `${channel}-${thread}`}] ${await userName(userId)} requested help`)
+    console.log(`❓ [${channel}-${thread}] ${await userName(userId)} requested help`)
     return
   }
 
   if (/^!sessions$/i.test(text)) {
-    const keyHint = `${channel}-${thread}`
-    console.log(`📋 [${keyHint}] ${await userName(userId)} listing sessions`)
+    console.log(`📋 [${channel}-${thread}] ${await userName(userId)} listing sessions`)
     try {
       const result = await opencode.client.session.list()
       const list = (result.data || []) as any[]
       if (list.length === 0) {
         await app.client.chat
-          .postMessage({ channel, thread_ts: thread, text: "📋 No sessions found." })
+          .postMessage({ channel, thread_ts: thread, text: "No active sessions." })
           .catch(() => {})
         return
       }
-      const lines: string[] = []
+      const blocks: any[] = [
+        { type: "header", text: { type: "plain_text", text: `Sessions (${list.length})`, emoji: true } },
+      ]
       for (const s of list as any[]) {
-        const title = s.title || s.id
+        const title = s.title || s.id.slice(0, 8)
         const age = Date.now() - (s.time?.created || 0)
         const ageStr =
           age < 60_000
-            ? `${Math.floor(age / 1000)}s ago`
+            ? `${Math.floor(age / 1000)}s`
             : age < 3_600_000
-              ? `${Math.floor(age / 60_000)}m ago`
+              ? `${Math.floor(age / 60_000)}m`
               : age < 86_400_000
-                ? `${Math.floor(age / 3_600_000)}h ago`
-                : `${Math.floor(age / 86_400_000)}d ago`
+                ? `${Math.floor(age / 3_600_000)}h`
+                : `${Math.floor(age / 86_400_000)}d`
         let link = s.share?.url
         if (!link) {
           try {
@@ -367,11 +414,15 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
             link = share.data?.share?.url
           } catch {}
         }
-        lines.push(link ? `• [${title}](${link}) — ${ageStr}` : `• ${title} — ${ageStr}`)
+        const text = link ? `<${link}|${title}>` : title
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: `*${text}*  ·  ${ageStr} ago` },
+        })
       }
-      const header = `**📋 Sessions** (${list.length} total)`
       await app.client.chat
-        .postMessage({ channel, thread_ts: thread, text: `${header}\n${lines.join("\n")}` })
+        .postMessage({ channel, thread_ts: thread, text: "Sessions", blocks })
+        .catch(() => {})
         .catch(() => {})
     } catch (e) {
       console.error(`📋 sessions list failed: ${(e as Error).message}`)
@@ -382,7 +433,9 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
     return
   }
 
-  if (/^!tempuser\s+<@([A-Z0-9]+)>$/i.test(text)) {
+  const noBotMention = rawText.replace(/<@${botUserId}>/g, "").trim()
+
+  if (/^!tempuser\s+<@([A-Z0-9]+)>$/i.test(noBotMention)) {
     const tempId = RegExp.$1
     const session = sessions.get(`${channel}-${thread}`)
     if (!session) {
@@ -392,6 +445,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       return
     }
     session.tempUsers.add(tempId)
+    saveSessions()
     const name = await userName(tempId)
     console.log(`👤 [${channel}-${thread}] ${await userName(userId)} granted temp access to ${name}`)
     void logSlack(
@@ -518,6 +572,7 @@ async function handleIncoming(channel: string, thread: string, userId: string, r
       tempUsers: new Set(),
     }
     sessions.set(key, session)
+    saveSessions()
 
     const shareResult = await opencode.client.session.share({
       path: { id: createResult.data.id },
@@ -647,12 +702,7 @@ app.action("resume_btn", async ({ ack, body }) => {
 })
 
 app.event("app_mention", async ({ event }) => {
-  const raw = event.text || ""
-  if (/^!help\b/i.test(raw) || /^!tempuser\b/i.test(raw)) {
-    await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, raw, event.ts)
-    return
-  }
-  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, raw, event.ts)
+  await handleIncoming(event.channel, event.thread_ts || event.ts, event.user, event.text || "", event.ts)
 })
 
 app.event("message", async ({ message }) => {
@@ -669,11 +719,15 @@ app.event("message", async ({ message }) => {
   }
 
   if (!msg.thread_ts) return
-  if (!msg.text) return
+
   const cleanText = msg.text.replace(/<@[A-Z0-9]+>/g, "").trim()
-  const isQuickCmd = /^!help$/i.test(cleanText) || /^!tempuser\s+<@[A-Z0-9]+>$/i.test(cleanText)
-  if (!isQuickCmd && !sessions.has(`${msg.channel}-${msg.thread_ts}`)) return
-  if (!isQuickCmd && directlyMentionsBot(msg.text)) return
+  const hasActiveSession = sessions.has(`${msg.channel}-${msg.thread_ts}`)
+  const isCommand = /^!/.test(cleanText)
+
+  if (!hasActiveSession && !isCommand) return
+  if (!hasActiveSession && directlyMentionsBot(msg.text)) return
+  if (hasActiveSession && directlyMentionsBot(msg.text)) return
+
   await handleIncoming(msg.channel, msg.thread_ts, msg.user, msg.text, msg.ts)
 })
 
